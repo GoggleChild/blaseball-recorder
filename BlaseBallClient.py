@@ -2,18 +2,15 @@ import requests
 import socketio
 import datetime
 import json
-from pymongo import MongoClient
+from DBConnectors import *
 
 class BlaseBallClient:
-	def __init__(self, mongo_uri = None):
+	def __init__(self, db_connector):
 		self.base_url = 'https://blaseball.com/'#could've called it "blase_url", but want to keep this clean
 		self.session = requests.Session()
 		with open ('initialState.json', 'r') as last_scores_file:
 			self.last_scores = json.loads(last_scores_file.read())
-		if not mongo_uri:
-			mongo_url = 'mongodb://localhost:27017/'
-		self.mongo_client = MongoClient(mongo_url)
-		self.bb_db = self.mongo_client.blaseball
+		self.dbc = db_connector
 		self.sio = self.setup_socket()
 	
 	def setup_socket(self):
@@ -37,23 +34,23 @@ class BlaseBallClient:
 									game_found = True
 									if event != old_event:
 										print(event['lastUpdate'])
-										self.bb_db['event'].insert_one({'record': event, 'received': received})
+										self.dbc.add_entry('event', {'record': event, 'received': received})
 									break
 							if not game_found:
-								self.bb_db['event'].insert_one({'record': event, 'received': received})
+								self.dbc.add_entry('event', {'record': event, 'received': received})
 					if object_type == 'sim':
 						if any(data[object_type].get(key) != self.last_scores[object_type].get(key) for key in data[object_type].keys() if key != 'day'):
-							self.bb_db[object_type].insert_one({'record': data[object_type], 'received': received})
+							self.dbc.add_entry(object_type, {'record': data[object_type], 'received': received})
 					else:
 						if data[object_type] != self.last_scores[object_type]:
-							self.bb_db[object_type].insert_one({'record': data[object_type], 'received': received})
+							self.dbc.add_entry(object_type, {'record': data[object_type], 'received': received})
 				else:
 					print('New field in gameDataUpdate:', object_type)
-					#If it's type that wasn't in the last one, insert it
+					#If it's type that wasn't in the last one, record it
 					if object_type in schedule_types:
-						self.bb_db['event'].insert_many([{'record': record, 'received': received} for record in data[object_type]])
+						self.dbc.add_entries('event', [{'record': record, 'received': received} for record in data[object_type]])
 					else:
-						self.bb_db[object_type].insert_one({'record': data[object_type], 'received': received})
+						self.dbc.add_entry(object_type, {'record': data[object_type], 'received': received})
 			self.last_scores = data
 		
 		@sio.event
