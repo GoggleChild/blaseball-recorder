@@ -9,7 +9,9 @@ class BlaseBallClient:
 		self.base_url = 'https://blaseball.com/'#could've called it "blase_url", but want to keep this clean
 		self.session = requests.Session()
 		with open ('initialState.json', 'r') as last_scores_file:
-			self.last_scores = json.loads(last_scores_file.read())
+			init_state = json.loads(last_scores_file.read())
+			self.last_scores = init_state['gameUpdates']
+			self.last_league = init_state['leagueUpdates']
 		self.dbc = db_connector
 		self.sio = self.setup_socket()
 	
@@ -18,9 +20,10 @@ class BlaseBallClient:
 		@sio.event
 		def connect():
 			print('connection established')
-			
-		@sio.on('gameDataUpdate')
-		def on_message(data):
+		
+		#TODO: Handle what happens when you get new datatypes the database won't expect. Should probably put this on the DBConnector. For now we're just using MongoDB and that sorts it out on its own
+		@sio.event
+		def gameDataUpdate(data):
 			received = datetime.datetime.utcnow()
 			schedule_types = ('schedule', 'tomorrowSchedule')
 			for object_type in data.keys():
@@ -47,11 +50,41 @@ class BlaseBallClient:
 				else:
 					print('New field in gameDataUpdate:', object_type)
 					#If it's type that wasn't in the last one, record it
-					if object_type in schedule_types:
+					if object_type in schedule_types and data[object_type]:
 						self.dbc.add_entries('event', [{'record': record, 'received': received} for record in data[object_type]])
 					else:
 						self.dbc.add_entry(object_type, {'record': data[object_type], 'received': received})
 			self.last_scores = data
+		
+		@sio.event
+		def leagueDataUpdate(data):
+			received = datetime.datetime.utcnow()
+			for object_type in data.keys():
+				if object_type in self.last_league:
+					if object_type == 'teams':
+						for team in data[object_type]:
+							team_id = team['_id']
+							team_found = False
+							for old_team in self.last_league[object_type]:
+								if team_id == old_team['_id']:
+									team_found = True
+									if team != old_team:
+										self.dbc.add_entry(object_type, {'record': team, 'received': received})
+									break
+							if not team_found:
+								self.dbc.add_entry(object_type, {'record': team, 'received': received})
+					else:
+						if data[object_type] != self.last_league[object_type]:
+							self.dbc.add_entry(object_type, {'record': data[object_type], 'received': received})
+				else:
+					print('New field in leagueDataUpdate:', object_type)
+					#If it's type that wasn't in the last one, record it
+					if object_type == 'teams' and data[object_type]:
+						self.dbc.add_entries(object_type, [{'record': record, 'received': received} for record in data[object_type]])
+					else:
+						self.dbc.add_entry(object_type, {'record': data[object_type], 'received': received})
+			self.last_league = data
+						
 		
 		@sio.event
 		def disconnect():
@@ -68,7 +101,7 @@ class BlaseBallClient:
 	
 	def save_last_scores(self):
 		with open ('initialState.json', 'w') as last_scores_file:
-			json.dump(self.last_scores, last_scores_file)
+			json.dump({'gameUpdates': self.last_scores, 'leagueUpdates': self.last_league}, last_scores_file)
 	
 	#Database Calls
 	def get_db_item(self, type, id=None):
