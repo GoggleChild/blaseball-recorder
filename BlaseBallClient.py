@@ -38,7 +38,7 @@ class BlaseBallClient:
 									break
 							if not game_found:
 								self.dbc.add_entry('event', {'record': event, 'received': received})
-					if object_type == 'sim':
+					elif object_type == 'sim':
 						if any(data[object_type].get(key) != self.last_scores[object_type].get(key) for key in data[object_type].keys() if key != 'day'):
 							self.dbc.add_entry(object_type, {'record': data[object_type], 'received': received})
 					else:
